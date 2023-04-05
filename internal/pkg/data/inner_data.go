@@ -5,21 +5,29 @@ import (
 	"github.com/narcissus1024/graceful-switch/internal/pkg/config"
 	"github.com/narcissus1024/graceful-switch/tools"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 )
 
-type Content struct {
-	Id      string `json:"id"`
-	Content string `json:"content"`
+// InnerMetaData inner ssh config item
+type InnerMetaData struct {
+	Id       string `json:"id"`
+	Contents string `json:"contents"`
 }
 
-type ContentList struct {
-	contents map[string]Content
+//type InnerMetaData struct {
+//	Id       string     `json:"id"`
+//	Contents []MetaData `json:"contents"`
+//}
+
+// InnerDataList inner ssh config
+type InnerDataList struct {
+	contents map[string]InnerMetaData
 }
 
-func (d *ContentList) load(config *config.Config) error {
-	dataPath := config.GetDataPath()
+func (d *InnerDataList) Load() error {
+	dataPath := config.GetConfig().GetDataPath()
 	if !tools.IsExist(dataPath) {
 		if err := os.MkdirAll(dataPath, 0777); err != nil {
 			return err
@@ -30,7 +38,7 @@ func (d *ContentList) load(config *config.Config) error {
 		return err
 	}
 	for _, fs := range fslist {
-		content := Content{}
+		content := InnerMetaData{}
 		if !fs.IsDir() {
 			dataItem, err := ioutil.ReadFile(path.Join(dataPath, fs.Name()))
 			if err != nil {
@@ -42,16 +50,15 @@ func (d *ContentList) load(config *config.Config) error {
 			d.contents[content.Id] = content
 		}
 	}
+
+	// todo delete
+	log.Printf("内部数据：%+v\n", d.contents)
 	return nil
 }
 
-func (d *ContentList) Get(id string) Content {
-	return d.contents[id]
-}
-
-func (d *ContentList) UpdateAndPersist(content Content) error {
+func (d *InnerDataList) UpdateAndPersist(content InnerMetaData) error {
 	d.contents[content.Id] = content
-	contentPath := path.Join(config.Conf.GetDataPath(), content.Id+".json")
+	contentPath := path.Join(config.GetConfig().GetDataPath(), content.Id+".json")
 	contentByte, err := json.Marshal(content)
 	if err != nil {
 		return err
@@ -59,11 +66,24 @@ func (d *ContentList) UpdateAndPersist(content Content) error {
 	return ioutil.WriteFile(contentPath, contentByte, 0666)
 }
 
-//func (d *ContentList) Update(content Content) {
+func (d *InnerDataList) Get(id string) InnerMetaData {
+	return d.contents[id]
+}
+
+func (d *InnerDataList) GetAll() string {
+	res := ""
+	for _, v := range d.contents {
+		res += v.Contents
+		res += "\n"
+	}
+	return res
+}
+
+//func (d *InnerDataList) Update(content InnerMetaData) {
 //	d.contents[content.Id] = content
 //}
 //
-//func (d *ContentList) Persist(id string) error {
+//func (d *InnerDataList) Persist(id string) error {
 //	contentPath := path.Join(config.Conf.GetDataPath(), id+".json")
 //	contentByte, err := json.Marshal(d.Get(id))
 //	if err != nil {

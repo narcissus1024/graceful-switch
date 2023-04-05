@@ -7,44 +7,56 @@ import (
 	"os"
 	"os/user"
 	"path"
+	"sync"
 )
 
 var (
-	homeDir    string
-	configPath string
-	Conf       = new(Config)
+	homeDir string
+	config  *Config
+	once    sync.Once
 )
 
 func init() {
 	u, _ := user.Current()
 	homeDir = u.HomeDir
+}
 
-	Conf.StoreRoot = path.Join(homeDir, ".graceful-switch")
-	Conf.DataDirRoot = path.Join(Conf.StoreRoot, "data")
-	configPath = path.Join(Conf.StoreRoot, "config.json")
+func GetConfig() *Config {
+	once.Do(func() {
+		config = new(Config)
+		config.StoreRoot = path.Join(homeDir, ".graceful-switch")
+		config.DataDirRoot = path.Join(config.StoreRoot, "data")
+		config.SSHConfigPath = path.Join(homeDir, ".ssh", "config")
+		config.ConfigPath = path.Join(config.StoreRoot, "config.json")
+	})
+	return config
 }
 
 type Config struct {
-	StoreRoot   string `json:"storeRoot"`
-	DataDirRoot string `json:"dataDirRoot"`
+	// store root path, contain config and data file
+	StoreRoot string `json:"storeRoot"`
+	// data store root path
+	DataDirRoot   string `json:"dataDirRoot"`
+	SSHConfigPath string `json:"sshConfigPath"`
+	ConfigPath    string `json:"-"`
 }
 
 func (c *Config) Load() error {
-	if tools.IsExist(configPath) {
-		if configContent, err := ioutil.ReadFile(configPath); err != nil {
+	if tools.IsExist(c.ConfigPath) {
+		if configContent, err := ioutil.ReadFile(c.ConfigPath); err != nil {
 			return err
-		} else if err := json.Unmarshal(configContent, Conf); err != nil {
+		} else if err := json.Unmarshal(configContent, c); err != nil {
 			return err
 		}
 	} else {
-		defaultConfig, err := json.Marshal(Conf)
+		defaultConfig, err := json.Marshal(c)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(path.Dir(configPath), 0777); err != nil {
+		if err := os.MkdirAll(path.Dir(c.ConfigPath), 0777); err != nil {
 			return err
 		}
-		if err := os.WriteFile(configPath, defaultConfig, 0777); err != nil {
+		if err := os.WriteFile(c.ConfigPath, defaultConfig, 0777); err != nil {
 			return err
 		}
 	}
