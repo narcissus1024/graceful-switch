@@ -10,12 +10,14 @@ import (
 )
 
 type ViewManager struct {
-	App               fyne.App
-	Window            fyne.Window
-	DataIndexCanvas   *widget.List
-	DataContentCanvas *widget.Entry
-	SelectedId        string
-	SelectedTitle     string
+	App                fyne.App
+	Window             fyne.Window
+	DataIndexCanvas    *widget.List
+	DataContentCanvas  *widget.Entry
+	ContentToolCanvas  *fyne.Container
+	SelectedListItemId widget.ListItemID
+	SelectedId         string
+	SelectedTitle      string
 	//SSHManager        *controller.SSHManager
 	DataManager *data.DataManager
 }
@@ -47,15 +49,17 @@ func (v *ViewManager) InitView() {
 	v.Window.SetContent(container.NewBorder(topToolBar, nil, nil, nil, mainView))
 }
 
+// InitMainView InitContentView must be before InitSideBarView,
+// because sideBarBarView need to show ssh config for default select listItem
 func (v *ViewManager) InitMainView() fyne.CanvasObject {
-	// sidebar
-	v.DataIndexCanvas = v.InitSideBarView()
-
 	// ssh config content
 	contentView := v.InitContentView()
 
+	// sidebar
+	v.DataIndexCanvas = v.InitSideBarView()
+
 	result := container.NewHSplit(v.DataIndexCanvas, contentView)
-	result.Offset = 0.2
+	result.SetOffset(0.2)
 
 	return result
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -15,6 +16,17 @@ var (
 	manager   *DataManager
 	lineBreak = "\n"
 )
+
+func init() {
+	switch runtime.GOOS {
+	case "windows":
+		lineBreak = "\r\n"
+	case "linux":
+		lineBreak = "\n"
+	case "darwin":
+		lineBreak = "\r"
+	}
+}
 
 type Type string
 
@@ -30,8 +42,8 @@ func (t Type) String() string {
 func GetDataManager() *DataManager {
 	once.Do(func() {
 		manager = &DataManager{
-			InnerDataList:      &InnerDataList{contents: make(map[string]InnerMetaData)},
-			InnerDataIndexList: &InnerDataIndexList{contentIndexes: make([]InnerDataIndex, 0, 10)},
+			InnerDataList:      &InnerDataList{contents: make(map[string]*InnerMetaData)},
+			InnerDataIndexList: &InnerDataIndexList{contentIndexes: make([]*InnerDataIndex, 0, 10)},
 			SSHConfig:          &SSHConfig{},
 		}
 	})
@@ -53,18 +65,19 @@ func (d *DataManager) Init() error {
 		return err
 	}
 
-	if err := d.MergeConfig(); err != nil {
+	if err := d.InnerDataIndexList.Load(); err != nil {
 		return err
 	}
 
-	if err := d.InnerDataIndexList.Load(); err != nil {
+	if err := d.MergeConfig(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// MergeConfig merge sys ssh config and inner ssh config
+// MergeConfig merge sys ssh config with inner ssh config to sys ssh config
+// todo 优化，太复杂了
 func (d *DataManager) MergeConfig() error {
 	sysData := d.SSHConfig.SSHConfigData
 	innerData := d.InnerDataList.GetAll()
@@ -95,35 +108,47 @@ func (d *DataManager) MergeConfig() error {
 		}
 
 		line := string(l)
-		isHost, value := d.IsHostConfigItem(line)
+		isHost, hostValue := d.IsHostConfigItem(line)
 		if isHost {
-			findConfig, err := d.FindEquivalentHost(innerReader, value)
+			findConfig := ""
+			// todo 优化，先找id在看是否open，太麻烦了
+			exist, isOpen, err := d.ExistAndOpenInInnerData(hostValue)
 			if err != nil {
 				return err
 			}
-			// todo 优化
-			innerReader.Reset(strings.NewReader(innerData))
 
-			// 在inner中找到相同host，使用inner配置。sys则跳到下一个host
-			if len(findConfig) > 0 {
+			if exist && isOpen {
+				if findConfig, err = d.FindEquivalentHost(innerReader, hostValue); err != nil {
+					return err
+				}
+				innerReader.Reset(strings.NewReader(innerData))
+			}
+
+			// 在inner中找到相同host，并且open状态，使用inner配置
+			if exist {
+				foundHost[hostValue] = struct{}{}
+			}
+			if exist && isOpen {
 				skip = true
-				foundHost[value] = struct{}{}
-				continue
+				res += findConfig + lineBreak
+			} else if exist && !isOpen {
+				// inner存在host配置，并且是close状态，则不进行合并
+				skip = true
 			} else {
-				// 使用sys的
+				// inner不存在，使用sys的
 				skip = false
-				res += line + lineBreak
 			}
+		}
+		if skip {
+			continue
 		} else {
-			if skip {
-				continue
-			} else {
-				res += line + lineBreak
-			}
+			res += line + lineBreak
 		}
 	}
 
+	// 处理inner配置不在sys配置中的情况
 	skip = false
+	innerReader.Reset(strings.NewReader(innerData))
 	for {
 		l, _, err := innerReader.ReadLine()
 		if err != nil {
@@ -134,11 +159,15 @@ func (d *DataManager) MergeConfig() error {
 		}
 
 		line := string(l)
-		isHost, value := d.IsHostConfigItem(line)
+		isHost, hostValue := d.IsHostConfigItem(line)
 		if isHost {
 			skip = false
-			_, exist := foundHost[value]
-			if exist {
+			exist, isOpen, err := d.ExistAndOpenInInnerData(hostValue)
+			if err != nil {
+				return err
+			}
+			_, found := foundHost[hostValue]
+			if exist && !isOpen || found {
 				skip = true
 			}
 		}
@@ -151,13 +180,26 @@ func (d *DataManager) MergeConfig() error {
 	return nil
 }
 
+func (d *DataManager) ExistAndOpenInInnerData(hostValue string) (bool, bool, error) {
+	// todo 优化，先找id在看是否open，太麻烦了
+	id, err := d.InnerDataList.FindId(hostValue)
+	if err != nil {
+		return false, false, err
+	}
+	if len(id) > 0 {
+		if d.InnerDataIndexList.IsOpen(id) {
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
+// FindEquivalentHost find whole ssh config item which host value equal targetHost from reader
 func (d *DataManager) FindEquivalentHost(reader *bufio.Reader, targetHost string) (string, error) {
 	// todo inner data 必须host开头
 	// found为true，说明sys中的某个host，在inner中存在
 	found := false
-	// tmpHostValue 记录sys中不存在inner中的host配置 的host值。
-	// 以该值为key，所属该host的所有配置为value存储在map中
-	//tmpHostValue := ""
 	res := ""
 	for {
 		li, _, err := reader.ReadLine()
@@ -169,12 +211,6 @@ func (d *DataManager) FindEquivalentHost(reader *bufio.Reader, targetHost string
 		}
 		line := string(li)
 		isHost, hostValue := d.IsHostConfigItem(line)
-		//if isHost {
-		//	tmpHostValue = hostValue
-		//}
-		//if len(tmpHostValue) > 0 {
-		//	foundConfig[tmpHostValue] += line + lineBreak
-		//}
 		if isHost && hostValue == targetHost {
 			// sys的host能够在inner中找到
 			found = true
@@ -199,47 +235,20 @@ func (d *DataManager) FindEquivalentHost(reader *bufio.Reader, targetHost string
 //	return false
 //}
 
-// IsHostConfigItem parse each line of config in ~/.ssh/config
+// IsHostConfigItem check whether the row config is host config item.
+// if is host config item, return true and host value. otherwise, return false and ""
 func (d *DataManager) IsHostConfigItem(str string) (bool, string) {
-	reg := regexp.MustCompile(`\s*(?i)host[\s|\s*=\s*](.*)`)
-	res := reg.FindStringSubmatch(str)
-	if len(res) > 0 {
-		return true, res[1]
+	reg := regexp.MustCompile(`^\s*(?i)host\s*=?\s*`)
+	res := reg.Split(str, -1)
+
+	if len(res) > 1 {
+		return true, strings.TrimSpace(res[1])
 	}
 	return false, ""
 }
 
-// MergeConfig merge sys ssh config and inner ssh config
-//func (d *DataManager) MergeConfig() error {
-//	sshConfig := d.SSHConfig
-//	innerDataList := d.InnerDataList
-//
-//	for _, innerData := range innerDataList.contents {
-//		for i, item := range innerData.Contents {
-//			// sys存在，则覆盖；不存在则添加
-//			sshConfig.MetaDataList[item.Host] = innerData.Contents[i]
-//			//if _, exist := sshConfig.MetaDataList[item.Host]; exist {
-//			//	sshConfig.MetaDataList[item.Host] = item
-//			//} else {
-//			//	sshConfig.MetaDataList[item.Host] = item
-//			//}
-//		}
-//	}
-//	return nil
-//}
-
-func (d *DataManager) PersistSSHConfig() {
-
-}
-
-func (d *DataManager) AddData(id, text string) error {
-	content := InnerMetaData{
-		Id:       id,
-		Contents: text,
-	}
-	if err := d.InnerDataList.UpdateAndPersist(content); err != nil {
-		return err
-	}
+// PersistSSHConfig persist sys ssh config which contain inner ssh and sys ssh
+func (d *DataManager) PersistSSHConfig() error {
 	if err := d.MergeConfig(); err != nil {
 		return err
 	}
@@ -249,23 +258,52 @@ func (d *DataManager) AddData(id, text string) error {
 	return nil
 }
 
+// AddData add inner ssh config and persist
+func (d *DataManager) AddData(id, text string) error {
+	if len(id) == 0 || id == SYSTEM_ID_SSH || len(strings.TrimSpace(text)) == 0 {
+		return nil
+	}
+	content := &InnerMetaData{
+		Id:       id,
+		Contents: text,
+	}
+	if err := d.InnerDataList.UpdateAndPersist(content); err != nil {
+		return err
+	}
+	if err := d.PersistSSHConfig(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// AddDataIndex add inner ssh config index for inner ssh config data
 func (d *DataManager) AddDataIndex(t string, title string, ids ...string) error {
 	switch t {
 	case SIMPLE.String():
 		indexList := d.InnerDataIndexList
 		uid, _ := uuid.NewUUID()
-		index := InnerDataIndex{
+		index := &InnerDataIndex{
 			Id:    uid.String(),
 			Title: title,
 			Open:  true,
 		}
-		indexList.Append(index)
-		if err := indexList.Persist(); err != nil {
-			log.Println()
+		if err := indexList.Append(index); err != nil {
 			return err
 		}
+
 	case COMBINE.String():
 		log.Println(ids)
 	}
 	return nil
+}
+
+func (d *DataManager) GetSSHConfigById(id string) string {
+	if id == SYSTEM_ID_SSH {
+		return d.SSHConfig.SSHConfigData
+	}
+	innerData := d.InnerDataList.Get(id)
+	if innerData != nil {
+		return innerData.Contents
+	}
+	return ""
 }

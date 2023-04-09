@@ -1,13 +1,17 @@
 package data
 
 import (
+	"bufio"
 	"encoding/json"
 	"github.com/narcissus1024/graceful-switch/internal/pkg/config"
 	"github.com/narcissus1024/graceful-switch/tools"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
 	"path"
+	"regexp"
+	"strings"
 )
 
 // InnerMetaData inner ssh config item
@@ -16,14 +20,9 @@ type InnerMetaData struct {
 	Contents string `json:"contents"`
 }
 
-//type InnerMetaData struct {
-//	Id       string     `json:"id"`
-//	Contents []MetaData `json:"contents"`
-//}
-
 // InnerDataList inner ssh config
 type InnerDataList struct {
-	contents map[string]InnerMetaData
+	contents map[string]*InnerMetaData
 }
 
 func (d *InnerDataList) Load() error {
@@ -38,7 +37,7 @@ func (d *InnerDataList) Load() error {
 		return err
 	}
 	for _, fs := range fslist {
-		content := InnerMetaData{}
+		content := &InnerMetaData{}
 		if !fs.IsDir() {
 			dataItem, err := ioutil.ReadFile(path.Join(dataPath, fs.Name()))
 			if err != nil {
@@ -56,7 +55,14 @@ func (d *InnerDataList) Load() error {
 	return nil
 }
 
-func (d *InnerDataList) UpdateAndPersist(content InnerMetaData) error {
+func (d *InnerDataList) UpdateAndPersist(content *InnerMetaData) error {
+	if len(content.Id) == 0 || len(strings.TrimSpace(content.Contents)) == 0 {
+		return nil
+	}
+	// sys config
+	if content.Id == SYSTEM_ID_SSH {
+		return nil
+	}
 	d.contents[content.Id] = content
 	contentPath := path.Join(config.GetConfig().GetDataPath(), content.Id+".json")
 	contentByte, err := json.Marshal(content)
@@ -66,7 +72,7 @@ func (d *InnerDataList) UpdateAndPersist(content InnerMetaData) error {
 	return ioutil.WriteFile(contentPath, contentByte, 0666)
 }
 
-func (d *InnerDataList) Get(id string) InnerMetaData {
+func (d *InnerDataList) Get(id string) *InnerMetaData {
 	return d.contents[id]
 }
 
@@ -79,15 +85,35 @@ func (d *InnerDataList) GetAll() string {
 	return res
 }
 
-//func (d *InnerDataList) Update(content InnerMetaData) {
-//	d.contents[content.Id] = content
-//}
-//
-//func (d *InnerDataList) Persist(id string) error {
-//	contentPath := path.Join(config.Conf.GetDataPath(), id+".json")
-//	contentByte, err := json.Marshal(d.Get(id))
-//	if err != nil {
-//		return err
-//	}
-//	return ioutil.WriteFile(contentPath, contentByte, 0666)
-//}
+// todo 优化
+func (d *InnerDataList) FindId(hostValue string) (string,error) {
+	for _, v := range d.contents {
+		reader := bufio.NewReader(strings.NewReader(v.Contents))
+		for {
+			li, _, err := reader.ReadLine()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return "", err
+			}
+			line := string(li)
+			isHost, hv := d.IsHostConfigItem(line)
+			if isHost && hv == hostValue {
+				return v.Id, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// TODO 优化，重复代码
+func (d *InnerDataList) IsHostConfigItem(str string) (bool, string) {
+	reg := regexp.MustCompile(`^\s*(?i)host\s*=?\s*`)
+	res := reg.Split(str, -1)
+
+	if len(res) > 1 {
+		return true, strings.TrimSpace(res[1])
+	}
+	return false, ""
+}

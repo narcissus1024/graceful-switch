@@ -17,18 +17,18 @@ type InnerDataIndex struct {
 
 // InnerDataIndexList inner ssh config index list
 type InnerDataIndexList struct {
-	contentIndexes []InnerDataIndex
+	contentIndexes []*InnerDataIndex
 }
 
 func (d *InnerDataIndexList) Load() error {
-	contentIndexes := []InnerDataIndex{}
-	contentIndexes = append(contentIndexes, InnerDataIndex{
+	contentIndexes := []*InnerDataIndex{}
+	contentIndexes = append(contentIndexes, &InnerDataIndex{
 		Id:    SYSTEM_ID_SSH,
 		Title: "System SSH Config",
 		Open:  true,
 	})
 
-	innerIndex := []InnerDataIndex{}
+	innerIndex := []*InnerDataIndex{}
 	file, err := os.OpenFile(config.GetConfig().GetDataIndexPath(), os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return err
@@ -64,10 +64,39 @@ func (d *InnerDataIndexList) Persist() error {
 	return nil
 }
 
-func (d *InnerDataIndexList) Append(index InnerDataIndex) {
+func (d *InnerDataIndexList) Append(index *InnerDataIndex) error {
 	d.contentIndexes = append(d.contentIndexes, index)
+	if err := d.Persist(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (d *InnerDataIndexList) Get() []InnerDataIndex {
+func (d *InnerDataIndexList) GetAll() []*InnerDataIndex {
 	return d.contentIndexes
+}
+
+func (d *InnerDataIndexList) Get(id string) *InnerDataIndex {
+	for _, index := range d.contentIndexes {
+		if index.Id == id {
+			return index
+		}
+	}
+	return nil
+}
+
+func (d *InnerDataIndexList) SetOpen(id string, open bool) error {
+	index := d.Get(id)
+	index.Open = open
+	log.Printf("[setOpen]id: %s, title: %s, set open:%v\n",index.Id, index.Title,index.Open)
+	return d.Persist()
+}
+
+func (d *InnerDataIndexList) IsOpen(id string) bool {
+	for _, index := range d.contentIndexes {
+		if index.Id == id && index.Open {
+			return true
+		}
+	}
+	return false
 }
